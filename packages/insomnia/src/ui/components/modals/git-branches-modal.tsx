@@ -1,0 +1,504 @@
+import React, { type FC, useEffect, useState } from 'react';
+import {
+  Button,
+  Dialog,
+  GridList,
+  GridListItem,
+  Heading,
+  Input,
+  Label,
+  Modal,
+  ModalOverlay,
+  TextField,
+} from 'react-aria-components';
+import { useFetcher, useParams, useRevalidator } from 'react-router';
+
+import type { MergeConflict } from '../../../sync/types';
+import {
+  checkGitCanPush,
+  continueMerge,
+  type CreateNewGitBranchResult,
+  type GitBranchesLoaderData,
+  type GitChangesLoaderData,
+  mergeGitBranch,
+} from '../../routes/git-actions';
+import { PromptButton } from '../base/prompt-button';
+import { Icon } from '../icon';
+import { showAlert, showModal } from '.';
+import { SyncMergeModal } from './sync-merge-modal';
+
+const LocalBranchItem = ({
+  branch,
+  isCurrent,
+  organizationId,
+  projectId,
+  workspaceId,
+  hasUncommittedChanges,
+}: {
+  branch: string;
+  isCurrent: boolean;
+  organizationId: string;
+  projectId: string;
+  workspaceId: string;
+  hasUncommittedChanges: boolean;
+}) => {
+  const checkoutBranchFetcher = useFetcher<{} | { error: string }>();
+  const mergeBranchFetcher = useFetcher();
+  const deleteBranchFetcher = useFetcher();
+
+  useEffect(() => {
+    if (
+      checkoutBranchFetcher.data &&
+      'error' in checkoutBranchFetcher.data &&
+      checkoutBranchFetcher.data.error &&
+      checkoutBranchFetcher.state === 'idle'
+    ) {
+      const error: string =
+        checkoutBranchFetcher.data.error || 'An unexpected error occurred while checking out the branch.';
+      showAlert({
+        title: 'Error while checking out branch.',
+        message: error,
+      });
+    }
+  }, [checkoutBranchFetcher.data, checkoutBranchFetcher.state]);
+
+  useEffect(() => {
+    if (
+      mergeBranchFetcher.data &&
+      'error' in mergeBranchFetcher.data &&
+      mergeBranchFetcher.data.error &&
+      mergeBranchFetcher.state === 'idle'
+    ) {
+      const error: string = mergeBranchFetcher.data.error || 'An unexpected error occurred while merging the branches.';
+      showAlert({
+        title: 'Error while merging branches.',
+        message: error,
+      });
+    }
+  }, [mergeBranchFetcher.data, mergeBranchFetcher.state]);
+
+  useEffect(() => {
+    if (
+      deleteBranchFetcher.data &&
+      'error' in deleteBranchFetcher.data &&
+      deleteBranchFetcher.data.error &&
+      deleteBranchFetcher.state === 'idle'
+    ) {
+      const error: string = deleteBranchFetcher.data.error || 'An unexpected error occurred while deleting the branch.';
+      showAlert({
+        title: 'Error while deleting branch',
+        message: error,
+      });
+    }
+  }, [deleteBranchFetcher.data, deleteBranchFetcher.state]);
+
+  const [errMsg, setErrorMessage] = useState('');
+
+  const { revalidate } = useRevalidator();
+
+  return (
+    <div className="flex flex-col justify-start">
+      <div className="flex w-full items-center">
+        <span className="flex-1 truncate">
+          {branch} {isCurrent ? '*' : ''}
+        </span>
+        <div className="flex items-center gap-2">
+          {branch !== 'master' && (
+            <PromptButton
+              confirmMessage="Confirm"
+              className="flex min-w-[12ch] items-center justify-center gap-2 rounded-sm border border-solid border-[--hl-md] px-4 py-1 text-sm font-semibold text-[--color-font] ring-1 ring-transparent transition-all hover:bg-[--hl-xs] focus:ring-inset focus:ring-[--hl-md] aria-pressed:bg-[--hl-sm]"
+              doneMessage="Deleted"
+              disabled={isCurrent || branch === 'master'}
+              onClick={() => {
+                setErrorMessage('');
+                deleteBranchFetcher.submit(
+                  {
+                    branch,
+                  },
+                  {
+                    method: 'POST',
+                    action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/git/branch/delete`,
+                  },
+                );
+              }}
+            >
+              <Icon
+                icon={deleteBranchFetcher.state !== 'idle' ? 'spinner' : 'trash'}
+                className={`w-5 text-[--color-danger] ${deleteBranchFetcher.state !== 'idle' ? 'animate-spin' : ''}`}
+              />
+              Delete
+            </PromptButton>
+          )}
+          <Button
+            className="flex items-center justify-center gap-2 rounded-sm border border-solid border-[--hl-md] px-4 py-1 text-sm font-semibold text-[--color-font] ring-1 ring-transparent transition-all hover:bg-[--hl-xs] focus:ring-inset focus:ring-[--hl-md] aria-pressed:bg-[--hl-sm]"
+            isDisabled={isCurrent}
+            onPress={() => {
+              setErrorMessage('');
+              // file://./../../routes/git-actions.tsx#checkoutGitBranchAction
+              checkoutBranchFetcher.submit(
+                {
+                  branch,
+                },
+                {
+                  method: 'POST',
+                  action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/git/branch/checkout`,
+                },
+              );
+            }}
+          >
+            <Icon
+              icon={checkoutBranchFetcher.state !== 'idle' ? 'spinner' : 'turn-up'}
+              className={`w-5 ${checkoutBranchFetcher.state !== 'idle' ? 'animate-spin' : 'rotate-90'}`}
+            />
+            Checkout
+          </Button>
+          <PromptButton
+            className="flex min-w-[12ch] items-center justify-center gap-2 rounded-sm border border-solid border-[--hl-md] px-4 py-1 text-sm font-semibold text-[--color-font] ring-1 ring-transparent transition-all hover:bg-[--hl-xs] focus:ring-inset focus:ring-[--hl-md] aria-pressed:bg-[--hl-sm]"
+            doneMessage="Merged"
+            confirmMessage="Confirm"
+            loadingMessage="Merging"
+            disabled={isCurrent}
+            referToOnClickReturnValue
+            onClick={async () => {
+              setErrorMessage('');
+
+              if (hasUncommittedChanges) {
+                setErrorMessage(
+                  'You have uncommitted changes in your working tree. Please commit or discard them before merging.',
+                );
+              }
+              try {
+                const result = await mergeGitBranch({
+                  projectId,
+                  workspaceId,
+                  theirsBranch: branch,
+                  allowUncommittedChangesBeforeMerge: true,
+                });
+
+                if ('conflicts' in result) {
+                  await new Promise((resolve, reject) => {
+                    showModal(SyncMergeModal, {
+                      conflicts: result.conflicts,
+                      labels: result.labels,
+                      handleDone: (conflicts?: MergeConflict[]) => {
+                        if (Array.isArray(conflicts) && conflicts.length > 0) {
+                          continueMerge({
+                            projectId,
+                            workspaceId,
+                            handledMergeConflicts: conflicts,
+                            commitMessage: result.commitMessage,
+                            commitParent: result.commitParent,
+                          })
+                            .then(resolve, reject)
+                            .finally(() => {
+                              checkGitCanPush({ projectId, workspaceId });
+                              revalidate();
+                            });
+                        } else {
+                          // user aborted merge
+                          reject(new Error('You aborted the merge, no changes were made to working tree.'));
+                        }
+                      },
+                    });
+                  });
+                }
+
+                if ('errors' in result && result.errors && result.errors?.length > 0) {
+                  setErrorMessage(result.errors.join('\n'));
+                }
+
+                revalidate();
+              } catch (err) {
+                const errorMessage =
+                  err instanceof Error ? err.message : 'An unexpected error occurred while merging the branches.';
+
+                setErrorMessage(errorMessage);
+              }
+            }}
+          >
+            <Icon
+              icon={mergeBranchFetcher.state !== 'idle' ? 'spinner' : 'code-merge'}
+              className={`w-5 ${mergeBranchFetcher.state !== 'idle' ? 'animate-spin' : ''}`}
+            />
+            Merge
+          </PromptButton>
+        </div>
+      </div>
+      {errMsg && <div className="whitespace-break-spaces text-right text-[--color-danger]">{errMsg}</div>}
+    </div>
+  );
+};
+
+const RemoteBranchItem = ({
+  branch,
+  organizationId,
+  projectId,
+  workspaceId,
+}: {
+  branch: string;
+  isCurrent: boolean;
+  organizationId: string;
+  projectId: string;
+  workspaceId: string;
+}) => {
+  const pullBranchFetcher = useFetcher();
+
+  useEffect(() => {
+    if (
+      pullBranchFetcher.data &&
+      'error' in pullBranchFetcher.data &&
+      pullBranchFetcher.data.error &&
+      pullBranchFetcher.state === 'idle'
+    ) {
+      const error: string = pullBranchFetcher.data.error || 'An unexpected error occurred while pulling the branch.';
+      showAlert({
+        title: 'Error while pulling branch.',
+        message: error,
+      });
+    }
+  }, [pullBranchFetcher.data, pullBranchFetcher.state]);
+
+  return (
+    <div className="flex w-full items-center">
+      <span className="flex-1 truncate">{branch}</span>
+      <div className="flex items-center gap-2">
+        <Button
+          className="flex min-w-[12ch] items-center justify-center gap-2 rounded-sm border border-solid border-[--hl-md] px-4 py-1 text-sm font-semibold text-[--color-font] ring-1 ring-transparent transition-all hover:bg-[--hl-xs] focus:ring-inset focus:ring-[--hl-md] aria-pressed:bg-[--hl-sm]"
+          onPress={() =>
+            pullBranchFetcher.submit(
+              {
+                branch,
+              },
+              {
+                method: 'POST',
+                action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/git/branch/checkout`,
+              },
+            )
+          }
+        >
+          <Icon
+            icon={pullBranchFetcher.state !== 'idle' ? 'spinner' : 'cloud-arrow-down'}
+            className={`w-5 ${pullBranchFetcher.state !== 'idle' ? 'animate-spin' : ''}`}
+          />
+          Fetch and checkout
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+interface Props {
+  currentBranch: string;
+  branches: string[];
+  onClose: () => void;
+}
+
+function sortBranches(branchA: string, branchB: string) {
+  if (branchA === 'master') {
+    return -1;
+  } else if (branchB === 'master') {
+    return 1;
+  }
+  return branchA.localeCompare(branchB);
+}
+
+export const GitBranchesModal: FC<Props> = ({ currentBranch, branches, onClose }) => {
+  const { organizationId, projectId, workspaceId } = useParams() as {
+    organizationId: string;
+    projectId: string;
+    workspaceId: string;
+  };
+
+  const branchesFetcher = useFetcher<GitBranchesLoaderData>();
+  const createBranchFetcher = useFetcher<CreateNewGitBranchResult>();
+
+  const errors = branchesFetcher.data && 'errors' in branchesFetcher.data ? branchesFetcher.data.errors : [];
+  const { remoteBranches, branches: localBranches } =
+    branchesFetcher.data && 'branches' in branchesFetcher.data
+      ? branchesFetcher.data
+      : { branches: [], remoteBranches: [] };
+
+  const fetchedBranches = localBranches.length > 0 ? localBranches : branches;
+  const remoteOnlyBranches = remoteBranches.filter(b => !fetchedBranches.includes(b));
+  const isFetchingRemoteBranches = branchesFetcher.state !== 'idle';
+
+  useEffect(() => {
+    if (branchesFetcher.state === 'idle' && !branchesFetcher.data) {
+      branchesFetcher.load(
+        `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/git/branches`,
+      );
+    }
+  }, [branchesFetcher, organizationId, projectId, workspaceId]);
+
+  const createNewBranchError =
+    createBranchFetcher.data?.errors && createBranchFetcher.data.errors.length > 0
+      ? createBranchFetcher.data.errors[0]
+      : null;
+
+  const gitChangesFetcher = useFetcher<GitChangesLoaderData>();
+  useEffect(() => {
+    if (gitChangesFetcher.state === 'idle' && !gitChangesFetcher.data) {
+      // file://./../../routes/git-actions.tsx#gitChangesLoader
+      gitChangesFetcher.load(
+        `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/git/changes`,
+      );
+    }
+  }, [organizationId, projectId, workspaceId, gitChangesFetcher]);
+
+  const hasUncommittedChanges = Boolean(
+    gitChangesFetcher.data?.changes &&
+      (gitChangesFetcher.data.changes.staged.length > 0 || gitChangesFetcher.data.changes.unstaged.length > 0),
+  );
+
+  return (
+    <ModalOverlay
+      isOpen
+      onOpenChange={isOpen => {
+        !isOpen && onClose();
+      }}
+      isDismissable
+      className="fixed left-0 top-0 z-10 flex h-[--visual-viewport-height] w-full items-center justify-center bg-black/30"
+    >
+      <Modal
+        onOpenChange={isOpen => {
+          !isOpen && onClose();
+        }}
+        className="flex max-h-full w-full max-w-4xl flex-col rounded-md border border-solid border-[--hl-sm] bg-[--color-bg] p-[--padding-lg] text-[--color-font]"
+      >
+        <Dialog className="flex h-full flex-1 flex-col overflow-hidden outline-none">
+          {({ close }) => (
+            <div className="flex flex-1 flex-col gap-4 overflow-hidden">
+              <div className="flex flex-shrink-0 items-center justify-between gap-2">
+                <Heading slot="title" className="text-2xl">
+                  Branches
+                </Heading>
+                <Button
+                  className="flex aspect-square h-6 flex-shrink-0 items-center justify-center rounded-sm text-sm text-[--color-font] ring-1 ring-transparent transition-all hover:bg-[--hl-xs] focus:ring-inset focus:ring-[--hl-md] aria-pressed:bg-[--hl-sm]"
+                  onPress={close}
+                >
+                  <Icon icon="x" />
+                </Button>
+              </div>
+              <createBranchFetcher.Form
+                action={`/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/git/branch/new`}
+                method="POST"
+                className="flex flex-shrink-0 flex-col gap-2"
+              >
+                <TextField className="flex flex-col gap-2">
+                  <Label className="col-span-4">New branch name:</Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      required
+                      className="col-span-3 h-8 w-full flex-1 rounded-sm border border-solid border-[--hl-sm] bg-[--color-bg] py-1 pl-2 pr-7 text-[--color-font] transition-colors placeholder:italic placeholder:opacity-60 focus:outline-none focus:ring-1 focus:ring-[--hl-md]"
+                      type="text"
+                      name="branch"
+                      placeholder="Branch name"
+                    />
+                    <Button
+                      className="flex h-8 min-w-[12ch] items-center justify-center gap-2 rounded-sm border border-solid border-[--hl-md] px-4 py-1 text-sm font-semibold text-[--color-font] ring-1 ring-transparent transition-all hover:bg-[--hl-xs] focus:ring-inset focus:ring-[--hl-md] aria-pressed:bg-[--hl-sm]"
+                      isDisabled={createBranchFetcher.state !== 'idle'}
+                      type="submit"
+                    >
+                      <Icon
+                        className={`w-5 ${createBranchFetcher.state !== 'idle' ? 'animate-spin' : ''}`}
+                        icon={createBranchFetcher.state !== 'idle' ? 'spinner' : 'plus'}
+                      />{' '}
+                      Create
+                    </Button>
+                  </div>
+                </TextField>
+                {createNewBranchError && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-solid border-[--hl-md] bg-[rgba(var(--color-warning-rgb),var(--tw-bg-opacity))] bg-opacity-50 p-[--padding-sm] text-[--color-font-warning]">
+                    <p className="text-base">
+                      <Icon icon="exclamation-triangle" className="mr-2" />
+                      {createNewBranchError}
+                    </p>
+                  </div>
+                )}
+              </createBranchFetcher.Form>
+
+              <div className="flex max-h-96 flex-1 select-none flex-col divide-y divide-solid divide-[--hl-sm] overflow-hidden rounded border border-solid border-[--hl-sm]">
+                <Heading className="p-2 text-sm font-semibold uppercase text-[--hl]">Local Branches</Heading>
+                <GridList
+                  aria-label="Branches list"
+                  selectionMode="none"
+                  items={fetchedBranches.sort(sortBranches).map(branch => ({
+                    id: branch,
+                    key: branch,
+                    name: branch,
+                    isCurrent: branch === currentBranch,
+                  }))}
+                  className="flex flex-1 flex-col divide-y divide-solid divide-[--hl-sm] overflow-y-auto focus:outline-none data-[empty]:py-0"
+                >
+                  {item => (
+                    <GridListItem
+                      id={item.id}
+                      key={item.key}
+                      textValue={item.name}
+                      className="w-full p-2 transition-colors focus:bg-[--hl-sm] focus:outline-none"
+                    >
+                      <LocalBranchItem
+                        branch={item.name}
+                        isCurrent={item.isCurrent}
+                        organizationId={organizationId}
+                        projectId={projectId}
+                        workspaceId={workspaceId}
+                        hasUncommittedChanges={hasUncommittedChanges}
+                      />
+                    </GridListItem>
+                  )}
+                </GridList>
+              </div>
+
+              <div className="flex max-h-96 flex-1 select-none flex-col divide-y divide-solid divide-[--hl-sm] overflow-hidden rounded border border-solid border-[--hl-sm]">
+                <Heading className="p-2 text-sm font-semibold uppercase text-[--hl]">Remote Branches</Heading>
+                <GridList
+                  aria-label="Remote Branches list"
+                  selectionMode="none"
+                  items={remoteOnlyBranches.sort(sortBranches).map(branch => ({
+                    id: branch,
+                    key: branch,
+                    name: branch,
+                    isCurrent: branch === currentBranch,
+                  }))}
+                  renderEmptyState={() => (
+                    <div className="p-2 text-center text-[--color-font-disabled]">
+                      {isFetchingRemoteBranches ? 'Fetching remote branches...' : 'No remote branches found'}
+                    </div>
+                  )}
+                  className="flex flex-1 flex-col divide-y divide-solid divide-[--hl-sm] overflow-y-auto focus:outline-none data-[empty]:py-0"
+                >
+                  {item => (
+                    <GridListItem
+                      id={item.id}
+                      key={item.key}
+                      textValue={item.name}
+                      className="w-full p-2 transition-colors focus:bg-[--hl-sm] focus:outline-none"
+                    >
+                      <RemoteBranchItem
+                        branch={item.name}
+                        isCurrent={item.isCurrent}
+                        organizationId={organizationId}
+                        projectId={projectId}
+                        workspaceId={workspaceId}
+                      />
+                    </GridListItem>
+                  )}
+                </GridList>
+                {errors.length > 0 && (
+                  <div className="p-2">
+                    {errors.map(error => (
+                      <div key={error} className="p-2">
+                        {error}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </Dialog>
+      </Modal>
+    </ModalOverlay>
+  );
+};
