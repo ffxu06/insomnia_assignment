@@ -4,7 +4,7 @@ import type { Application } from 'express';
 import { json } from 'express';
 
 import type { Collaborator, CollaboratorType } from '../../insomnia/src/ui/routes/invite';
-import { getRandomId, getTeamName, getUserEmail } from '../tests/test-utils';
+import { getRandomId, getTeamName, getUserEmail } from '../utilities/test-utils';
 
 const currentPlan = {
   isActive: true,

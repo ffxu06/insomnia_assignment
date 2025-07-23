@@ -19,4 +19,6 @@ fixtures/inso-nedb/insomnia.GitRepository.db
 fixtures/inso-nedb/insomnia.OAuth2Token.db
 fixtures/inso-nedb/insomnia.PluginData.db
 
-test-result
+test-results
+playwright-report
+traces
